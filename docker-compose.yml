@@ -1,0 +1,137 @@
+version: '3.8'
+
+services:
+  # 1. Base de Datos (SPOF)
+  db:
+    image: postgres:15-alpine
+    container_name: postgres_spof
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: eventflow_db
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. Caché (Redis)
+  cache:
+    image: redis:7-alpine
+    container_name: redis_cache
+    ports:
+      - "6379:6379"
+
+  # 3. Cola de Mensajes (RabbitMQ)
+  queue:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq_queue
+    ports:
+      - "5672:5672"
+      - "15672:15672" # Interfaz de gestión web y métricas
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+  # 4. Aplicación Principal (3 Nodos)
+  app-node-1:
+    build: ./eventflow-distribuido/app-principal
+    container_name: app_node_1
+    environment:
+      DB_HOST: db
+      REDIS_HOST: cache
+      RABBITMQ_HOST: queue
+      NODE_ID: 1
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_started}
+      queue: {condition: service_started}
+    
+  app-node-2:
+    build: ./eventflow-distribuido/app-principal
+    container_name: app_node_2
+    environment:
+      DB_HOST: db
+      REDIS_HOST: cache
+      RABBITMQ_HOST: queue
+      NODE_ID: 2
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_started}
+      queue: {condition: service_started}
+      
+  app-node-3:
+    build: ./eventflow-distribuido/app-principal
+    container_name: app_node_3
+    environment:
+      DB_HOST: db
+      REDIS_HOST: cache
+      RABBITMQ_HOST: queue
+      NODE_ID: 3
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_started}
+      queue: {condition: service_started}
+
+  # 5. Balanceador de Carga (NGINX)
+  balancer:
+    build: ./eventflow-distribuido/nginx
+    container_name: nginx_balancer
+    ports:
+      - "80:80"
+    depends_on:
+      - app-node-1
+      - app-node-2
+      - app-node-3
+    
+  # 6. Microservicio 1: Notificaciones (Consumidor Resiliente)
+  ms-notificaciones:
+    build: ./eventflow-distribuido/microservicio-1
+    container_name: ms_notificaciones
+    restart: always # CLAVE: Asegura la disponibilidad del consumidor tras fallo de BD
+    environment:
+      RABBITMQ_HOST: queue
+      DB_HOST: db
+    depends_on:
+      queue: {condition: service_started}
+      db: {condition: service_healthy} # CLAVE: Ahora espera a que la BD esté realmente lista
+
+  # 7. Microservicio 2: Análisis (API REST)
+  ms-analisis:
+    build: ./eventflow-distribuido/microservicio-2
+    container_name: ms_analisis
+    environment:
+      DB_HOST: db
+    depends_on:
+      db: {condition: service_healthy}
+
+  # 8. Monitoreo (Prometheus)
+  prometheus:
+    image: prom/prometheus:v2.40.1
+    container_name: prometheus_server
+    volumes:
+      - ./eventflow-distribuido/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - db
+      - queue
+      - balancer
+      
+  # 9. Visualización (Grafana)
+  grafana:
+    image: grafana/grafana:9.3.2
+    container_name: grafana_dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus

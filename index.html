@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EventFlow - Sistema Distribuido Resiliente</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
+        .card { transition: all 0.3s ease; }
+        .success { background-color: #d1fae5; color: #065f46; }
+        .warning { background-color: #fef3c7; color: #b45309; }
+        .error { background-color: #fee2e2; color: #991b1b; }
+    </style>
+</head>
+<body class="p-8">
+
+    <div class="max-w-4xl mx-auto space-y-8">
+        <h1 class="text-4xl font-extrabold text-gray-900 mb-6 border-b-4 border-indigo-600 pb-2">
+            EventFlow: Arquitectura Resiliente
+        </h1>
+        <p class="text-gray-600">
+            Esta interfaz demuestra la alta disponibilidad y la tolerancia a fallos ante la caída de la Base de Datos (SPOF).
+        </p>
+
+        <!-- PANELES DE ESTADO -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div id="status-balanceador" class="card p-4 rounded-lg shadow-lg border-l-4 border-indigo-500 bg-white">
+                <p class="text-sm font-medium text-gray-500">Nodo Activo (Balanceo)</p>
+                <p id="node-response" class="text-2xl font-bold text-indigo-600">Cargando...</p>
+            </div>
+            <div id="status-cache" class="card p-4 rounded-lg shadow-lg border-l-4 border-yellow-500 bg-white">
+                <p class="text-sm font-medium text-gray-500">Fuente de Lectura</p>
+                <p id="read-source" class="text-2xl font-bold text-yellow-600">N/A</p>
+            </div>
+            <div id="status-bd" class="card p-4 rounded-lg shadow-lg border-l-4 border-red-500 bg-white">
+                <p class="text-sm font-medium text-gray-500">Estado del SPOF (BD)</p>
+                <p id="db-status" class="text-sm font-bold text-red-600">Desconocido</p>
+            </div>
+        </div>
+
+        <!-- SECCIÓN DE PRUEBAS -->
+        <div class="space-y-4 pt-4">
+            <h2 class="text-2xl font-bold text-gray-700">Pruebas de Resiliencia</h2>
+
+            <!-- PRUEBA 1: LECTURA RESILIENTE -->
+            <div class="card p-6 bg-white rounded-lg shadow-md border-t-8 border-yellow-300">
+                <h3 class="text-xl font-semibold mb-2">1. Leer Datos (Cache-Aside)</h3>
+                <p class="text-gray-600 mb-4">Consulta el Evento 999. Si la BD cae, el resultado debe venir del Cache (REDIS).</p>
+                <button onclick="readEvent(999)" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">
+                    Consultar Evento 999
+                </button>
+                <div id="read-result" class="mt-4 p-3 text-sm rounded-lg warning hidden"></div>
+            </div>
+
+            <!-- PRUEBA 2: ESCRITURA ASÍNCRONA -->
+            <div class="card p-6 bg-white rounded-lg shadow-md border-t-8 border-green-300">
+                <h3 class="text-xl font-semibold mb-2">2. Comprar Ticket (Escritura Asíncrona)</h3>
+                <p class="text-gray-600 mb-4">Envía una transacción a la cola (RabbitMQ). El sistema acepta la petición inmediatamente, incluso si la BD está caída.</p>
+                
+                <div class="space-y-2 max-w-sm mb-4">
+                    <input type="number" id="user-id" placeholder="User ID (Ej: 1)" value="1" class="w-full p-2 border rounded-md">
+                    <input type="number" id="event-id" placeholder="Event ID (Ej: 101)" value="101" class="w-full p-2 border rounded-md">
+                    <input type="number" id="quantity" placeholder="Cantidad (Ej: 2)" value="2" class="w-full p-2 border rounded-md">
+                </div>
+
+                <button onclick="createPurchase()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">
+                    Enviar Compra (POST)
+                </button>
+                <div id="write-result" class="mt-4 p-3 text-sm rounded-lg success hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost';
+
+        async function fetchNodeStatus() {
+            try {
+                const response = await fetch(API_BASE + '/');
+                const data = await response.json();
+                document.getElementById('node-response').textContent = `Nodo ${data.message.split(' ')[2]}`;
+                document.getElementById('status-balanceador').classList.add('bg-green-100');
+                document.getElementById('db-status').textContent = 'BD UP (Asumido)';
+                document.getElementById('db-status').classList.remove('text-red-600');
+                document.getElementById('db-status').classList.add('text-green-600');
+            } catch (error) {
+                document.getElementById('node-response').textContent = 'ERROR/Caído';
+                document.getElementById('status-balanceador').classList.add('bg-red-100');
+                document.getElementById('db-status').textContent = 'BD DOWN (o Nodos Caídos)';
+            }
+        }
+
+        async function readEvent(id) {
+            const resultDiv = document.getElementById('read-result');
+            resultDiv.classList.add('hidden');
+            document.getElementById('read-source').textContent = 'Consultando...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/events/${id}`);
+                const data = await response.json();
+                
+                // Actualiza el origen de la lectura
+                document.getElementById('read-source').textContent = data.source.toUpperCase();
+
+                resultDiv.textContent = `ÉXITO: Evento ${data.event.id} - ${data.event.name}. Fuente: ${data.source.toUpperCase()}.`;
+                resultDiv.className = resultDiv.className.replace(/warning|success|error/g, data.source === 'cache' ? 'warning' : 'success');
+
+            } catch (error) {
+                // Captura el error 503 (DB Down + Cache Miss)
+                document.getElementById('read-source').textContent = 'FALLO TOTAL';
+                resultDiv.textContent = 'CRÍTICO: No se pudo leer el evento. La BD está caída Y la caché está vacía (Cache Miss).';
+                resultDiv.className = resultDiv.className.replace(/warning|success|error/g, 'error');
+            }
+            resultDiv.classList.remove('hidden');
+        }
+
+        async function createPurchase() {
+            const userId = document.getElementById('user-id').value;
+            const eventId = document.getElementById('event-id').value;
+            const quantity = document.getElementById('quantity').value;
+            
+            const resultDiv = document.getElementById('write-result');
+            resultDiv.classList.add('hidden');
+            resultDiv.textContent = 'Enviando transacción a la cola...';
+
+            try {
+                const response = await fetch(`${API_BASE}/purchase?user_id=${userId}&event_id=${eventId}&quantity=${quantity}`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+
+                if (data.status === 'ACCEPTED_ASYNC') {
+                    // Si recibimos ACCEPTED_ASYNC, la transacción fue encolada con éxito.
+                    resultDiv.textContent = `ÉXITO ASÍNCRONO: Transacción ${data.transaction_id} aceptada y encolada. El consumidor escribirá en BD al recuperarse.`;
+                    resultDiv.className = resultDiv.className.replace(/warning|success|error/g, 'success');
+                } else {
+                    resultDiv.textContent = `Error: ${data.detail || JSON.stringify(data)}`;
+                    resultDiv.className = resultDiv.className.replace(/warning|success|error/g, 'error');
+                }
+
+            } catch (error) {
+                // Error de conexión total (si RabbitMQ también falla)
+                resultDiv.textContent = `ERROR CRÍTICO: Falló la conexión al backend/cola. ${error.message}`;
+                resultDiv.className = resultDiv.className.replace(/warning|success|error/g, 'error');
+            }
+            resultDiv.classList.remove('hidden');
+        }
+
+        // Ejecutar al cargar la página
+        fetchNodeStatus();
+    </script>
+</body>
+</html>
+```
+eof
+
+### 2. Siguiente Tarea: Monitoreo Básico
+
+Para el requisito de Monitoreo, vamos a añadir los servicios de Prometheus y Grafana a tu `docker-compose.yml`.
+
+**Tu Tarea:** Edita el `docker-compose.yml` para añadir los siguientes servicios (puedes colocarlos al final del archivo):
+
+```yaml
+# ... (al final de docker-compose.yml) ...
+
+  # 6. Monitoreo (Prometheus)
+  prometheus:
+    image: prom/prometheus:v2.40.1
+    container_name: prometheus_server
+    volumes:
+      - ./eventflow-distribuido/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+  # 7. Visualización (Grafana)
+  grafana:
+    image: grafana/grafana:9.3.2
+    container_name: grafana_dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
