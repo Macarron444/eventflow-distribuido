@@ -21,10 +21,10 @@ def get_db_connection():
     for i in range(retries):
         try:
             conn = psycopg2.connect(
-                host=DB_HOST,
-                database="eventflow_db",
-                user="user",
-                password="password",
+                host=os.environ.get("DB_HOST", "db"),
+                dbname=os.environ.get("DB_NAME", "eventflow_db"),
+                user=os.environ.get("DB_USER", "user"),
+                password=os.environ.get("DB_PASSWORD", "password"),
                 connect_timeout=2 # Un timeout de conexión un poco más largo
             )
             print("CONSUMER INFO: Conexión a la BD exitosa.")
